@@ -1,6 +1,178 @@
 <!DOCTYPE html>
-<!-- Placeholder for full HTML game content, normally would include all features described. -->
 <html lang="en">
-<head><meta charset="UTF-8"><title>The Lost Star</title></head>
-<body><h1>The full game content is too long to display here.</h1></body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Lost Star</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, sans-serif;
+    }
+    canvas {
+      display: block;
+      background: linear-gradient(to top, #1a1a1a, #333);
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+    }
+    #titleScreen, #winMessage, #pauseMenu {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: white;
+      font-size: 2em;
+      display: none;
+    }
+    #titleScreen { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="450"></canvas>
+  <div id="ui">Weapon: <span id="weaponStatus">None</span> | Stars: <span id="starCount">0</span></div>
+  <div id="titleScreen">
+    <p>🌟 The Lost Star 🌟</p>
+    <p>Press ENTER to Begin</p>
+  </div>
+  <div id="pauseMenu">
+    <p>⏸️ Paused</p>
+    <p>R - Resume | Q - Quit | M - Mute</p>
+  </div>
+  <div id="winMessage">🎉 Victory! The last star is saved.</div>
+  <audio id="bgMusic" src="https://cdn.pixabay.com/download/audio/2023/03/30/audio_2e3d2a8a8f.mp3?filename=space-vibes-142296.mp3" autoplay loop></audio>
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const titleScreen = document.getElementById("titleScreen");
+    const pauseMenu = document.getElementById("pauseMenu");
+    const winMessage = document.getElementById("winMessage");
+    const bgMusic = document.getElementById("bgMusic");
+    const weaponStatus = document.getElementById("weaponStatus");
+    const starCount = document.getElementById("starCount");
+
+    const gravity = 0.5;
+    const keys = {};
+    let gameStarted = false, isPaused = false, gameWon = false;
+    let inventory = [], starsCollected = 0;
+
+    let player = {
+      x: 50, y: 350, width: 20, height: 60,
+      velocityX: 0, velocityY: 0,
+      speed: 4, jumping: false,
+      hasWeapon: false, health: 100
+    };
+
+    const boss = {
+      x: 600, y: 350, width: 30, height: 80,
+      health: 200, color: "darkred",
+      charging: false, cooldown: 0, velocityX: 0
+    };
+
+    const platforms = [
+      { x: 0, y: 410, width: 800, height: 40 },
+      { x: 200, y: 320, width: 120, height: 10 },
+      { x: 400, y: 250, width: 120, height: 10 }
+    ];
+
+    const collectibles = [
+      { x: 220, y: 290, width: 20, height: 20, color: "gold", collected: false }
+    ];
+
+    const weapon = { x: 100, y: 380, width: 20, height: 10, collected: false };
+
+    function drawStickFigure(x, y, w, h, color) {
+      const headRadius = w / 2, headX = x + headRadius, headY = y + headRadius;
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(headX, headY, headRadius, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(headX, headY + headRadius); ctx.lineTo(headX, y + h - 20); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(headX, headY + 10); ctx.lineTo(headX - 10, headY + 30);
+      ctx.moveTo(headX, headY + 10); ctx.lineTo(headX + 10, headY + 30); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(headX, y + h - 20); ctx.lineTo(headX - 10, y + h);
+      ctx.moveTo(headX, y + h - 20); ctx.lineTo(headX + 10, y + h); ctx.stroke();
+    }
+
+    function updatePlayer() {
+      player.velocityX = (keys["a"] || keys["ArrowLeft"]) ? -player.speed : (keys["d"] || keys["ArrowRight"]) ? player.speed : 0;
+      if ((keys["w"] || keys["ArrowUp"]) && !player.jumping) { player.velocityY = -10; player.jumping = true; }
+      if (keys[" "] && player.hasWeapon && boss.health > 0 && Math.abs(player.x - boss.x) < 50) boss.health -= 5;
+      player.velocityY += gravity;
+      player.x += player.velocityX; player.y += player.velocityY;
+      platforms.forEach(p => {
+        if (player.x < p.x + p.width && player.x + player.width > p.x && player.y + player.height <= p.y + 5 && player.y + player.height + player.velocityY >= p.y) {
+          player.y = p.y - player.height; player.velocityY = 0; player.jumping = false;
+        }
+      });
+    }
+
+    function updateBoss() {
+      if (boss.cooldown > 0) { boss.cooldown--; return; }
+      const dx = player.x - boss.x;
+      if (Math.abs(dx) < 300 && !boss.charging) { boss.charging = true; boss.velocityX = dx > 0 ? 6 : -6; }
+      if (boss.charging) {
+        boss.x += boss.velocityX;
+        if (boss.x < 0 || boss.x > canvas.width - boss.width || Math.abs(player.x - boss.x) < 30) {
+          boss.charging = false; boss.cooldown = 90;
+        }
+      }
+      if (player.x < boss.x + boss.width && player.x + player.width > boss.x && player.y < boss.y + boss.height && player.y + player.height > boss.y) {
+        player.health -= 1;
+      }
+    }
+
+    function updateCollectibles() {
+      collectibles.forEach(c => {
+        if (!c.collected && player.x < c.x + c.width && player.x + player.width > c.x && player.y < c.y + c.height && player.y + player.height > c.y) {
+          c.collected = true; starsCollected++; starCount.textContent = starsCollected;
+        }
+      });
+      if (!weapon.collected && player.x < weapon.x + weapon.width && player.x + player.width > weapon.x && player.y < weapon.y + weapon.height && player.y + player.height > weapon.y) {
+        weapon.collected = true; player.hasWeapon = true; inventory.push("Sword of Light"); weaponStatus.textContent = "Sword";
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      platforms.forEach(p => { ctx.fillStyle = "#555"; ctx.fillRect(p.x, p.y, p.width, p.height); });
+      drawStickFigure(player.x, player.y, player.width, player.height, "cyan");
+      drawStickFigure(boss.x, boss.y, boss.width, boss.height, boss.color);
+      ctx.fillStyle = "red"; ctx.fillRect(600, 20, (boss.health / 200) * 180, 10);
+      ctx.fillStyle = "lime"; ctx.fillRect(20, 20, player.health, 10);
+      collectibles.forEach(c => { if (!c.collected) { ctx.fillStyle = c.color; ctx.fillRect(c.x, c.y, c.width, c.height); } });
+      if (!weapon.collected) { ctx.fillStyle = "silver"; ctx.fillRect(weapon.x, weapon.y, weapon.width, weapon.height); }
+    }
+
+    function checkVictory() {
+      if (boss.health <= 0 && !gameWon) { gameWon = true; winMessage.style.display = "block"; }
+    }
+
+    function gameLoop() {
+      if (gameStarted && !isPaused && !gameWon) {
+        updatePlayer(); updateBoss(); updateCollectibles(); checkVictory(); draw();
+      }
+      requestAnimationFrame(gameLoop);
+    }
+
+    document.addEventListener("keydown", e => {
+      keys[e.key] = true;
+      if (e.key === "Enter" && !gameStarted) {
+        titleScreen.style.display = "none"; canvas.style.display = "block"; gameStarted = true;
+      }
+      if (e.key === "Escape") {
+        isPaused = !isPaused; pauseMenu.style.display = isPaused ? "block" : "none";
+      }
+      if (e.key === "r") location.reload();
+      if (e.key === "m") bgMusic.muted = !bgMusic.muted;
+    });
+    document.addEventListener("keyup", e => keys[e.key] = false);
+
+    gameLoop();
+  </script>
+</body>
 </html>
